@@ -1123,6 +1123,7 @@ export class FlexServer implements GristServer {
         welcomeNewUser
       ],
       formMiddleware: [
+        this._userIdMiddleware,
         forcedLoginMiddleware,
       ],
       forceLogin: this._redirectToLoginUnconditionally,
@@ -1882,6 +1883,22 @@ export class FlexServer implements GristServer {
     const probes = new BootProbes(this.app, this, '/api', adminMiddleware);
     probes.addEndpoints();
 
+    this.app.post('/api/admin/restart', requireInstallAdmin, expressWrap(async (req, resp) => {
+      const newConfig = req.body.newConfig;
+      resp.on('finish', () => {
+        // If we have IPC with parent process (e.g. when running under
+        // Docker) tell the parent that we have a new environment so it
+        // can restart us.
+        if (process.send) {
+          process.send({ action: 'restart', newConfig });
+        }
+      });
+      // On the topic of http response codes, thus spake MDN:
+      // "409: This response is sent when a request conflicts with the current state of the server."
+      const status = process.send ? 200 : 409;
+      return resp.status(status).send();
+    }));
+
     // Restrict this endpoint to install admins
     this.app.get('/api/install/prefs', requireInstallAdmin, expressWrap(async (_req, resp) => {
       const activation = await this._activations.current();
@@ -1970,7 +1987,7 @@ export class FlexServer implements GristServer {
   }
 
   public addUpdatesCheck() {
-    if (this._check('update')) { return; }
+    if (this._check('update', 'json')) { return; }
 
     // For now we only are active for sass deployments.
     if (this._deploymentType !== 'saas') { return; }
